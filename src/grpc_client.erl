@@ -37,6 +37,9 @@
          stop_stream/1, stop_stream/2,
          stop_connection/1]).
 
+
+-include_lib("glib/include/log.hrl").
+
 -type connection_option() ::
     verify_server_opt() |
     server_host_override_opt() |
@@ -244,20 +247,15 @@ stop_connection(Connection) ->
             Decoder::module(),
             Options::[stream_option() |
                       {timeout, timeout()}]) -> unary_response(map()).
-%% @doc Call a unary rpc in one go.
-%%
-%% Set up a stream, receive headers, message and trailers, stop
-%% the stream and assemble a response. This is a blocking function.
-unary(Connection, Message, Service, Rpc, Decoder, Options) ->
+% %% @doc Call a unary rpc in one go.
+% %%
+% %% Set up a stream, receive headers, message and trailers, stop
+% %% the stream and assemble a response. This is a blocking function.
+unary(ConnectionPool, Message, Service, Rpc, Decoder, Options) ->
     {Timeout, StreamOptions} = grpc_lib:keytake(timeout, Options, infinity),
-    try
-        {ok, Stream} = new_stream(Connection, Service,
-                                  Rpc, Decoder, StreamOptions),
+    poolboy:transaction(ConnectionPool, fun(Stream) -> 
+        gen_server:cast(Stream, {new_stream, Service, Rpc, Decoder, StreamOptions}),
         Response = grpc_client_stream:call_rpc(Stream, Message, Timeout),
-        stop_stream(Stream),
         Response
-    catch
-        _Type:_Error ->
-            {error, #{error_type => client,
-                      status_message => <<"error creating stream">>}}
-    end.
+    end).
+    

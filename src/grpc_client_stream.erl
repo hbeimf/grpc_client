@@ -31,6 +31,8 @@
          call_rpc/3,
          stop/2]).
 
+-export([start_link/1]).
+
 %% gen_server behaviors
 -export([code_change/3, handle_call/3, handle_cast/2, handle_info/2, init/1, terminate/2]).
 
@@ -58,6 +60,9 @@
 new(Connection, Service, Rpc, Encoder, Options) ->
     gen_server:start_link(?MODULE,
                           {Connection, Service, Rpc, Encoder, Options}, []).
+
+start_link(ParamsMap) ->        
+    gen_server:start_link(?MODULE, ParamsMap, []).              
 
 send(Pid, Message) ->
     gen_server:call(Pid, {send, Message}).
@@ -105,7 +110,22 @@ init({Connection, Service, Rpc, Encoder, Options}) ->
     catch
         _Class:_Error ->
             {stop, <<"failed to create stream">>}
-    end.
+    end;
+init(ParamsMap) when is_map(ParamsMap) ->
+    try
+        #{'Transport' := Transport, 'Host' := Host, 'Port' := Port} = ParamsMap,
+        {ok, Connection} = grpc_client:connect(Transport, Host, Port),
+        State = #{
+            connection => Connection,
+            transport => Transport, 
+            host => Host, 
+            port =>  Port
+        },
+        {ok, State}
+    catch
+        _Class:_Error ->
+            {stop, <<"failed to create stream">>}
+    end.   
 
 %% @private
 code_change(_OldVsn, State, _Extra) ->
@@ -149,6 +169,14 @@ handle_call({rcv, Timeout}, From, #{queue := Queue,
     end.
 
 %% @private
+handle_cast({new_stream, Service, Rpc, Encoder, Options}, #{connection := ConnectionDefault} = _State) ->
+    try
+        %%　复用 connection;　其它的更新
+        {noreply, new_stream(ConnectionDefault, Service, Rpc, Encoder, Options)}
+    catch
+        _Class:_Error ->
+            {stop, <<"failed to create stream">>}
+    end;
 handle_cast(_, State) ->
     {noreply, State}.
 
@@ -226,6 +254,7 @@ new_stream(Connection, Service, Rpc, Encoder, Options) ->
     Metadata = proplists:get_value(metadata, Options, #{}),
     TransportOptions = proplists:get_value(http2_options, Options, []),
     {ok, StreamId} = grpc_client_connection:new_stream(Connection, TransportOptions),
+
     RpcDef = Encoder:find_rpc_def(Service, Rpc),
     %% the gpb rpc def has 'input', 'output' etc.
     %% All the information is combined in 1 map,
@@ -290,6 +319,7 @@ default_headers(#{service := Service,
                  }) ->
     Path = iolist_to_binary(["/", Package, atom_to_list(Service),
                              "/", atom_to_list(Rpc)]),
+
     Headers1 = case Compression of
                    none ->
                        [];

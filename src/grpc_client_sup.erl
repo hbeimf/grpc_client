@@ -27,5 +27,12 @@ start_link() ->
     supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 init([]) ->
-    Procs = [],
+    Procs = [
+        child_sup(grpc_client_stream_sup_sup)      
+    ],
     {ok, {{one_for_one, 1, 5}, Procs}}.
+
+child_sup(Mod) ->
+    Child = {Mod, {Mod, start_link, []},
+        permanent, 5000, supervisor, [Mod]},
+        Child.  

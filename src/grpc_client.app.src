@@ -4,4 +4,7 @@
   {modules,[]},
   {registered, []},
   {env, []},
-  {applications,[]}]}.
+  {mod, {grpc_client_app, []}},
+%   {applications,[]}
+  {applications, [kernel, stdlib, poolboy]}
+  ]}.
