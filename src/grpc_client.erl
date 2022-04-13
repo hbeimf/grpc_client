@@ -37,9 +37,6 @@
          stop_stream/1, stop_stream/2,
          stop_connection/1]).
 
-
--include_lib("glib/include/log.hrl").
-
 -type connection_option() ::
     verify_server_opt() |
     server_host_override_opt() |
@@ -258,4 +255,3 @@ unary(ConnectionPool, Message, Service, Rpc, Decoder, Options) ->
         Response = grpc_client_stream:call_rpc(Stream, Message, Timeout),
         Response
     end).
-    
