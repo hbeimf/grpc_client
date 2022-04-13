@@ -31,6 +31,8 @@
          call_rpc/3,
          stop/2]).
 
+-export([start_link/1]).
+
 %% gen_server behaviors
 -export([code_change/3, handle_call/3, handle_cast/2, handle_info/2, init/1, terminate/2]).
 
@@ -59,6 +61,10 @@ new(Connection, Service, Rpc, Encoder, Options) ->
     gen_server:start_link(?MODULE,
                           {Connection, Service, Rpc, Encoder, Options}, []).
 
+start_link(#{'Service' := Service, 'Rpc' := Rpc, 'Encoder' := Encoder, 'Options' := Options}) ->
+    gen_server:start_link(?MODULE,
+                            {Service, Rpc, Encoder, Options}, []).
+                        
 send(Pid, Message) ->
     gen_server:call(Pid, {send, Message}).
 
@@ -102,6 +108,17 @@ call_rpc(Pid, Message, Timeout) ->
 init({Connection, Service, Rpc, Encoder, Options}) ->
     try
         {ok, new_stream(Connection, Service, Rpc, Encoder, Options)}
+    catch
+        _Class:_Error ->
+            {stop, <<"failed to create stream">>}
+    end;
+% {Service, Rpc, Encoder, Options}
+init({_Service, _Rpc, _Encoder, _Options}) ->
+    % ?LOG(self()),
+    try
+        % Connection = nil,
+        % {ok, Connection} = grpc_client:connect(tcp, "localhost", 10000),
+        {ok, undefined}
     catch
         _Class:_Error ->
             {stop, <<"failed to create stream">>}
@@ -149,6 +166,13 @@ handle_call({rcv, Timeout}, From, #{queue := Queue,
     end.
 
 %% @private
+handle_cast({new_stream, Connection, Service, Rpc, Encoder, Options}, _State) ->
+    try
+        {noreply, new_stream(Connection, Service, Rpc, Encoder, Options)}
+    catch
+        _Class:_Error ->
+            {stop, <<"failed to create stream">>}
+    end;
 handle_cast(_, State) ->
     {noreply, State}.
 

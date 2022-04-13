@@ -244,20 +244,29 @@ stop_connection(Connection) ->
             Decoder::module(),
             Options::[stream_option() |
                       {timeout, timeout()}]) -> unary_response(map()).
-%% @doc Call a unary rpc in one go.
-%%
-%% Set up a stream, receive headers, message and trailers, stop
-%% the stream and assemble a response. This is a blocking function.
+% %% @doc Call a unary rpc in one go.
+% %%
+% %% Set up a stream, receive headers, message and trailers, stop
+% %% the stream and assemble a response. This is a blocking function.
+% unary(Connection, Message, Service, Rpc, Decoder, Options) ->
+%     {Timeout, StreamOptions} = grpc_lib:keytake(timeout, Options, infinity),
+%     try
+%         {ok, Stream} = new_stream(Connection, Service,
+%                                   Rpc, Decoder, StreamOptions),
+%         Response = grpc_client_stream:call_rpc(Stream, Message, Timeout),
+%         stop_stream(Stream),
+%         Response
+%     catch
+%         _Type:_Error ->
+%             {error, #{error_type => client,
+%                       status_message => <<"error creating stream">>}}
+%     end.
+
+
 unary(Connection, Message, Service, Rpc, Decoder, Options) ->
     {Timeout, StreamOptions} = grpc_lib:keytake(timeout, Options, infinity),
-    try
-        {ok, Stream} = new_stream(Connection, Service,
-                                  Rpc, Decoder, StreamOptions),
+    poolboy:transaction(grpc_client_sup:pool_id(), fun(Stream) -> 
+        gen_server:cast(Stream, {new_stream, Connection, Service, Rpc, Decoder, StreamOptions}),
         Response = grpc_client_stream:call_rpc(Stream, Message, Timeout),
-        stop_stream(Stream),
         Response
-    catch
-        _Type:_Error ->
-            {error, #{error_type => client,
-                      status_message => <<"error creating stream">>}}
-    end.
+    end).
