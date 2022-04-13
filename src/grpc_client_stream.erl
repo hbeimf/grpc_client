@@ -117,8 +117,9 @@ init({_Service, _Rpc, _Encoder, _Options}) ->
     % ?LOG(self()),
     try
         % Connection = nil,
-        % {ok, Connection} = grpc_client:connect(tcp, "localhost", 10000),
-        {ok, undefined}
+        {ok, Connection} = grpc_client:connect(tcp, "localhost", 10000),
+        State = #{connection => Connection},
+        {ok, State}
     catch
         _Class:_Error ->
             {stop, <<"failed to create stream">>}
@@ -166,9 +167,9 @@ handle_call({rcv, Timeout}, From, #{queue := Queue,
     end.
 
 %% @private
-handle_cast({new_stream, Connection, Service, Rpc, Encoder, Options}, _State) ->
+handle_cast({new_stream, _Connection, Service, Rpc, Encoder, Options}, #{connection := ConnectionDefault} = _State) ->
     try
-        {noreply, new_stream(Connection, Service, Rpc, Encoder, Options)}
+        {noreply, new_stream(ConnectionDefault, Service, Rpc, Encoder, Options)}
     catch
         _Class:_Error ->
             {stop, <<"failed to create stream">>}
