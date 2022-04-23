@@ -36,6 +36,10 @@
 %% gen_server behaviors
 -export([code_change/3, handle_call/3, handle_cast/2, handle_info/2, init/1, terminate/2]).
 
+-include_lib("glib/include/log.hrl").
+
+-define(TIMER_SECONDS, 30000).  % 心跳间隔时间
+
 -type connection() :: grpc_client_connection:connection().
 -type stream() ::
     #{stream_id := integer(),
@@ -50,7 +54,12 @@
       headers_sent := boolean(),
       metadata := grpc_client:metadata(),
       compression := grpc_client:compression_method(),
-      buffer := binary()}.
+      buffer := binary(),
+      transport := tcp, %% 将连接信息加到这里；如果断开连接了，用来重连；
+      host := string(),
+      port := integer()}.
+
+% #{'Transport' := Transport, 'Host' := Host, 'Port' := Port}
 
 -spec new(Connection::connection(),
           Service::atom(),
@@ -61,6 +70,7 @@ new(Connection, Service, Rpc, Encoder, Options) ->
     gen_server:start_link(?MODULE,
                           {Connection, Service, Rpc, Encoder, Options}, []).
 
+%% 按习惯启动 actor 
 start_link(ParamsMap) ->        
     gen_server:start_link(?MODULE, ParamsMap, []).              
 
@@ -92,6 +102,7 @@ stop(Pid, ErrorCode) ->
     gen_server:call(Pid, {stop, ErrorCode}).
 
 %% @doc Call a unary rpc and process the response.
+%% 发送 请求， 永不超时；
 call_rpc(Pid, Message, Timeout) ->
     try send_last(Pid, Message) of
         ok ->
@@ -105,16 +116,23 @@ call_rpc(Pid, Message, Timeout) ->
 %% gen_server implementation
 %% @private
 init({Connection, Service, Rpc, Encoder, Options}) ->
+    % ?LOG({self(), start_stream}),
     try
         {ok, new_stream(Connection, Service, Rpc, Encoder, Options)}
     catch
         _Class:_Error ->
             {stop, <<"failed to create stream">>}
     end;
+
+%% 按 pool 方式传过来的参数初始化 actor 
 init(ParamsMap) when is_map(ParamsMap) ->
+    % ?LOG({self(), start_stream}),
     try
+        _TRef = erlang:send_after(?TIMER_SECONDS, self(), {heartbeat, next}),
+
         #{'Transport' := Transport, 'Host' := Host, 'Port' := Port} = ParamsMap,
         {ok, Connection} = grpc_client:connect(Transport, Host, Port),
+
         State = #{
             connection => Connection,
             transport => Transport, 
@@ -169,15 +187,22 @@ handle_call({rcv, Timeout}, From, #{queue := Queue,
     end.
 
 %% @private
-handle_cast({new_stream, Service, Rpc, Encoder, Options}, #{connection := ConnectionDefault} = _State) ->
+%% 在发起一个请求之前先更新相应的状态；
+handle_cast({new_stream, Service, Rpc, Encoder, Options}, 
+        #{connection := Connection, transport := Transport, host := Host, port := Port} = _State) ->
     try
         %%　复用 connection;　其它的更新
-        {noreply, new_stream(ConnectionDefault, Service, Rpc, Encoder, Options)}
+        NewStream = new_stream(Connection, Service, Rpc, Encoder, Options),
+
+        %% Transport ｜ Host ｜ Port 这三个变量维持到新的状态里，
+        NewStream1 = NewStream#{transport => Transport, host => Host, port => Port},
+        {noreply, NewStream1}
     catch
         _Class:_Error ->
             {stop, <<"failed to create stream">>}
     end;
 handle_cast(_, State) ->
+    % ?LOG(State),
     {noreply, State}.
 
 %% @private
@@ -239,11 +264,36 @@ handle_info(timeout, #{response_pending := true,
                        client := Client} = Stream) ->
     gen_server:reply(Client, {error, timeout}),
     {noreply, Stream#{response_pending => false}};
+
+%% 断线重连；
+handle_info({'EXIT', _Pid, closed_by_peer}, _Stream) ->
+    % ?LOG({reconnect, self()}),
+    % {noreply, Stream};
+    {stop, closed_by_peer};
+    
+% handle_info({'DOWN', _Ref, process, _Pid, closed_by_peer}, Stream) ->
+%     ?LOG({reconnect, self()}),
+%     {noreply, Stream};
+
+
+
+handle_info({heartbeat, _}, #{connection := Connection} = Stream) ->
+    _TRef = erlang:send_after(?TIMER_SECONDS, self(), {heartbeat, next}),
+    Ping = grpc_client:ping(Connection, 1000),
+    % ?LOG({ping, Ping}),
+    {noreply, Stream};
+
 handle_info(_InfoMessage, Stream) ->
+    % ?LOG(InfoMessage),
     {noreply, Stream}.
+
+% {'EXIT',<0.301.0>,closed_by_peer}
+% {'DOWN',#Ref<0.1982072025.553123841.84564>,process,<0.305.0>,closed_by_peer}
+
 
 %% @private
 terminate(_Reason, _State) ->
+    % ?LOG({self(), stop_stream}),
     ok.
 
 
@@ -256,10 +306,18 @@ new_stream(Connection, Service, Rpc, Encoder, Options) ->
     {ok, StreamId} = grpc_client_connection:new_stream(Connection, TransportOptions),
 
     RpcDef = Encoder:find_rpc_def(Service, Rpc),
+    % ?LOG(#{'Encoder' => Encoder, 'Service' => Service, 'Rpc' => Rpc, 'RpcDef' => RpcDef}), %%　helloworld
+    % #{'Encoder' => helloworld,'Rpc' => 'SayHello', 
+    % 'RpcDef' =>
+    %     #{input => 'HelloRequest',input_stream => false,name => 'SayHello',
+    %         opts => [],output => 'HelloReply',output_stream => false},
+    % 'Service' => 'Greeter'}
+
     %% the gpb rpc def has 'input', 'output' etc.
     %% All the information is combined in 1 map,
     %% which is is the state of the gen_server.
     RpcDef#{stream_id => StreamId,
+            % package => <<"helloworld.">>,
             package => [],
             service => Service,
             rpc => Rpc,
@@ -280,10 +338,25 @@ send_msg(#{stream_id := StreamId,
            state := State
           } = Stream, Message, EndStream) ->
     Encoded = encode(Stream, Message),
+    % ?LOG(#{'Encoded' => Encoded, 'Message' => Message}),
     case HeadersSent of
         false ->
             DefaultHeaders = default_headers(Stream),
             AllHeaders = add_metadata(DefaultHeaders, Metadata),
+            % ?LOG(#{'Connection' => Connection, 'StreamId' =>StreamId, 'AllHeaders'=>AllHeaders}),
+            %% 发送请求 header 
+            % #{'AllHeaders' =>
+            % [{<<":method">>,<<"POST">>},
+            % {<<":scheme">>,<<"http">>},
+            % {<<":path">>,<<"/Greeter/SayHello">>},
+            % {<<":authority">>,<<"localhost">>},
+            % {<<"content-type">>,<<"application/grpc+proto">>},
+            % {<<"user-agent">>,<<"grpc-erlang/0.0.1">>},
+            % {<<"te">>,<<"trailers">>}],
+            %     'Connection' =>
+            %         #{client => http2_client,host => <<"localhost">>,
+            %             http_connection => <0.311.0>,scheme => <<"http">>},
+            %     'StreamId' => 1}
             ok = grpc_client_connection:send_headers(Connection, StreamId, AllHeaders);
         true ->
             ok
@@ -301,6 +374,14 @@ send_msg(#{stream_id := StreamId,
             {true, _} ->
                 closed
         end,
+    % ?LOG(#{'Connection' => Connection, 'StreamId' => StreamId, 'Encoded' => Encoded, 'Opts' => Opts}),
+    %% 发送请求 body
+        % #{'Connection' =>
+        %     #{client => http2_client,host => <<"localhost">>,
+        %         http_connection => <0.311.0>,scheme => <<"http">>},
+        % 'Encoded' => <<0,0,0,0,7,10,5,87,111,114,108,100>>,
+        % 'Opts' => [{end_stream,true}],
+        % 'StreamId' => 1}
     ok = grpc_client_connection:send_body(Connection, StreamId, Encoded, Opts),
     Stream#{headers_sent => true,
             state => NewState}.
@@ -319,6 +400,10 @@ default_headers(#{service := Service,
                  }) ->
     Path = iolist_to_binary(["/", Package, atom_to_list(Service),
                              "/", atom_to_list(Rpc)]),
+
+    % Path = <<"/helloworld.Greeter/SayHello">>,
+
+    % ?LOG(#{'Package' => Package, 'Service' => Service, 'Rpc' => Rpc, 'Path' => Path}),
 
     Headers1 = case Compression of
                    none ->
@@ -358,6 +443,7 @@ encode(#{encoder := Encoder,
     %% RequestData = Encoder:encode_msg(Map, MsgType),
     try Encoder:encode_msg(Map, MsgType) of
         RequestData ->
+            % ?LOG(#{'RequestData' => RequestData, 'Encoder' => Encoder, 'Map' => Map, 'MsgType' => MsgType, 'CompressionMethod' => CompressionMethod}),
             maybe_compress(RequestData, CompressionMethod)
     catch
         error:function_clause ->

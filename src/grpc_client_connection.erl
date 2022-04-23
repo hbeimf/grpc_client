@@ -45,6 +45,8 @@
 -export_type([connection/0,
               stream_id/0]).
 
+-include_lib("glib/include/log.hrl").
+
 -type connection_option() :: grpc_client:connection_option().
 -type stream_option() :: grpc_client:stream_option().
 
@@ -55,10 +57,14 @@
 %% @doc Open a new http/2 connection and check authorisation.
 new(Transport, Host, Port, Options) ->
     {GrpcOptions, H2Options} = process_options(Options, Transport),
+    % ?LOG({GrpcOptions, H2Options}),
     H2Client = proplists:get_value(http2_client, GrpcOptions, http2_client),
     ConnectResult = H2Client:new_connection(Transport, Host, Port, H2Options),
+    % ?LOG({H2Client, ConnectResult}), % {http2_client,{ok,<0.274.0>}}
     case ConnectResult of
         {ok, Pid} ->
+            % ?LOG({Pid, Host, Transport, H2Client, scheme(Transport)}),
+            % {<0.274.0>,"localhost",tcp,http2_client,<<"http">>}
             verify_server(#{http_connection => Pid,
                             host => list_to_binary(Host),
                             scheme => scheme(Transport),
@@ -86,7 +92,14 @@ send_headers(#{http_connection := Pid,
 
 send_body(#{http_connection := Pid,
             client := Client}, StreamId, Body, Opts) ->
+    % ?LOG({client, Client, Pid, StreamId, Body, Opts}),
     Client:send_data(Pid, StreamId, Body, Opts).
+
+% ==========log begin========{grpc_client_connection,91}==============
+% {client,http2_client,<0.274.0>,1,
+%         <<0,0,0,0,7,10,5,87,111,114,108,100>>,
+%         [{end_stream,true}]}
+
 
 ping(#{http_connection := Pid,
       client := Client}, Timeout) ->
@@ -111,6 +124,9 @@ peercert(#{http_connection := Pid,
 %%% ---------------------------------------------------------------------------
 
 verify_server(#{scheme := <<"http">>} = Connection, _) ->
+    % ?LOG(Connection),
+%     #{client => http2_client,host => <<"localhost">>,http_connection => <0.274.0>,
+%   scheme => <<"http">>}
     {ok, Connection};
 verify_server(Connection, Options) ->
     case proplists:get_value(verify_server_identity, Options, false) of

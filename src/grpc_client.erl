@@ -37,6 +37,9 @@
          stop_stream/1, stop_stream/2,
          stop_connection/1]).
 
+
+-include_lib("glib/include/log.hrl").
+
 -type connection_option() ::
     verify_server_opt() |
     server_host_override_opt() |
@@ -248,10 +251,29 @@ stop_connection(Connection) ->
 % %%
 % %% Set up a stream, receive headers, message and trailers, stop
 % %% the stream and assemble a response. This is a blocking function.
-unary(ConnectionPool, Message, Service, Rpc, Decoder, Options) ->
+% unary(Connection, Message, Service, Rpc, Decoder, Options) ->
+%     {Timeout, StreamOptions} = grpc_lib:keytake(timeout, Options, infinity),
+%     try
+%         %% 这个地儿启动一个 actor, 用完立马就结束， 可以改成从池子里取一个空闲的 actor,用后释放就不会报异常了， 
+%         {ok, Stream} = new_stream(Connection, Service,
+%                                   Rpc, Decoder, StreamOptions),
+
+%         % ?LOG({'Stream', Stream, Message}),
+%         Response = grpc_client_stream:call_rpc(Stream, Message, Timeout),
+%         stop_stream(Stream),
+%         Response
+%     catch
+%         _Type:_Error ->
+%             {error, #{error_type => client,
+%                       status_message => <<"error creating stream">>}}
+%     end.
+ 
+unary({ok, ConnectionPool}, Message, Service, Rpc, Decoder, Options) ->
     {Timeout, StreamOptions} = grpc_lib:keytake(timeout, Options, infinity),
     poolboy:transaction(ConnectionPool, fun(Stream) -> 
         gen_server:cast(Stream, {new_stream, Service, Rpc, Decoder, StreamOptions}),
         Response = grpc_client_stream:call_rpc(Stream, Message, Timeout),
         Response
-    end).
+    end);
+unary(_, _, _, _, _, _) ->
+    {false, check_server_connect}.
