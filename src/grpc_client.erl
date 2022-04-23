@@ -38,7 +38,7 @@
          stop_connection/1]).
 
 
--include_lib("glib/include/log.hrl").
+% -include_lib("glib/include/log.hrl").
 
 -type connection_option() ::
     verify_server_opt() |

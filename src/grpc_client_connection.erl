@@ -45,7 +45,7 @@
 -export_type([connection/0,
               stream_id/0]).
 
--include_lib("glib/include/log.hrl").
+% -include_lib("glib/include/log.hrl").
 
 -type connection_option() :: grpc_client:connection_option().
 -type stream_option() :: grpc_client:stream_option().

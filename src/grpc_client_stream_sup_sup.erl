@@ -12,7 +12,7 @@
 
 -define(SERVER, ?MODULE).
 
--include_lib("glib/include/log.hrl").
+% -include_lib("glib/include/log.hrl").
 %%====================================================================
 %% API functions
 %%====================================================================

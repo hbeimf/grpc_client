@@ -36,7 +36,7 @@
 %% gen_server behaviors
 -export([code_change/3, handle_call/3, handle_cast/2, handle_info/2, init/1, terminate/2]).
 
--include_lib("glib/include/log.hrl").
+% -include_lib("glib/include/log.hrl").
 
 -define(TIMER_SECONDS, 30000).  % 心跳间隔时间
 
